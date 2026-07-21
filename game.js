@@ -63,6 +63,118 @@ let lives = 4;
 const maxLives = 7;
 let playerScore = 0;
 
+// ---- Feature 3: Sound Manager (Web Audio API, no external audio files needed) ----
+class SoundManager {
+    constructor() {
+        this.muted = false;
+        this.ctx = null; // lazy-init to satisfy browser autoplay policy
+    }
+    _getCtx() {
+        if (!this.ctx) {
+            this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (this.ctx.state === 'suspended') this.ctx.resume();
+        return this.ctx;
+    }
+    _tone(freq, type, duration, vol = 0.3, freqEnd = null) {
+        if (this.muted) return;
+        try {
+            const ctx = this._getCtx();
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.type = type;
+            osc.frequency.setValueAtTime(freq, ctx.currentTime);
+            if (freqEnd) osc.frequency.exponentialRampToValueAtTime(freqEnd, ctx.currentTime + duration);
+            gain.gain.setValueAtTime(vol, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+            osc.start(ctx.currentTime);
+            osc.stop(ctx.currentTime + duration);
+        } catch (e) { /* audio blocked or unsupported */ }
+    }
+    _noise(duration, vol = 0.35) {
+        if (this.muted) return;
+        try {
+            const ctx = this._getCtx();
+            const bufSize = Math.floor(ctx.sampleRate * duration);
+            const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+            const data = buf.getChannelData(0);
+            for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+            const src = ctx.createBufferSource();
+            const gain = ctx.createGain();
+            src.buffer = buf;
+            src.connect(gain);
+            gain.connect(ctx.destination);
+            gain.gain.setValueAtTime(vol, ctx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+            src.start();
+        } catch (e) {}
+    }
+    shoot()       { this._tone(880, 'square', 0.08, 0.2); }
+    enemyShoot()  { this._tone(440, 'square', 0.1, 0.12); }
+    hit()         { this._tone(180, 'sawtooth', 0.18, 0.35); }
+    explosion()   { this._noise(0.3, 0.4); }
+    powerUp()     { this._tone(880, 'sine', 0.12, 0.3); setTimeout(() => this._tone(1047, 'sine', 0.2, 0.35), 100); }
+    gameOver()    { [440, 330, 220, 110].forEach((f, i) => setTimeout(() => this._tone(f, 'sawtooth', 0.35, 0.4), i * 180)); }
+    win()         { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this._tone(f, 'sine', 0.25, 0.4), i * 150)); }
+    bossWarning() { this._tone(150, 'sawtooth', 0.25, 0.3); }
+    toggle()      { this.muted = !this.muted; return this.muted; }
+}
+const soundManager = new SoundManager();
+
+// ---- Feature 4: Difficulty system ----
+const DIFFICULTY_CONFIG = {
+    easy:   { lives: 6, hpMult: 0.7,  speedMult: 0.85, fireIntervalMult: 1.43 },
+    normal: { lives: 4, hpMult: 1.0,  speedMult: 1.0,  fireIntervalMult: 1.0  },
+    hard:   { lives: 3, hpMult: 1.3,  speedMult: 1.15, fireIntervalMult: 0.71 }
+};
+let difficulty = 'normal';
+
+// ---- Feature 1: Rapid Fire & Triple Shot buff state ----
+let rapidFireActive = false;
+let rapidFireTimer = 0;
+const RAPID_FIRE_DURATION = 6000;   // ms
+const RAPID_FIRE_INTERVAL = 150;    // ms between auto shots
+let tripleShotActive = false;
+let tripleShotTimer = 0;
+const TRIPLE_SHOT_DURATION = 6000;  // ms
+
+// ---- Feature 6: Combo system state ----
+let comboCount = 0;
+let comboTimer = 0;
+const COMBO_DURATION = 1500; // ms window to chain kills
+let comboActive = false;
+
+// Helper: returns current score multiplier based on combo count
+function getComboMultiplier() {
+    if (!comboActive || comboCount < 2) return 1;
+    return Math.min(comboCount, 5);
+}
+
+// Helper: called on every enemy kill to update combo and award score
+function registerKill(baseScore) {
+    comboCount++;
+    comboTimer = 0;
+    comboActive = true;
+    const mult = getComboMultiplier();
+    playerScore += Math.round(baseScore * mult);
+}
+
+// Helper: fire player shot(s) — handles Triple Shot buff
+// Called by InputHandler events and rapid-fire auto-shot in Level.update()
+function firePlayerShot(level) {
+    if (!level.player || level.player.delete) return;
+    if (tripleShotActive) {
+        level.playerProjectiles.push(new Projectile(true, level.player, 0));
+        level.playerProjectiles.push(new Projectile(true, level.player, -10)); // 10° upward
+        level.playerProjectiles.push(new Projectile(true, level.player, 10));  // 10° downward
+    } else {
+        level.playerProjectiles.push(new Projectile(true, level.player, 0));
+    }
+    soundManager.shoot();
+}
+
 class InputHandler {
     constructor(level) {
         this.level = level;
@@ -84,8 +196,9 @@ class InputHandler {
                     keys.ArrowDown.pressed = true;
                     break;
                 case " ":
+                    // Feature 1: fire on keydown (rapid fire auto-shot handled in Level.update)
                     if (!keys.space.pressed) {
-                        this.level.playerProjectiles.push(new Projectile(true, this.level.player));
+                        firePlayerShot(this.level);
                         keys.space.pressed = true;
                     }
                     break;
@@ -180,7 +293,8 @@ class InputHandler {
         buttonFire.addEventListener("pointerdown", ()=>{
             if (gameOver || !level.active || gamePause) return;
             if (!keys.space.pressed) {
-                this.level.playerProjectiles.push(new Projectile(true, this.level.player));
+                // Feature 1: use firePlayerShot for triple-shot support
+                firePlayerShot(this.level);
                 keys.space.pressed = true;
             }
         })
@@ -321,7 +435,9 @@ class Player {
     }
 }
 class Projectile {
-    constructor(isPlayer, object) {
+    // angle (degrees): 0 = straight right; negative = upward; positive = downward
+    // Feature 1: angle parameter supports Triple Shot angled projectiles
+    constructor(isPlayer, object, angle = 0) {
         this.object = object;
         this.isPlayer = isPlayer;  //boolean to differentiate enemy and player
         this.width = 20;
@@ -329,17 +445,22 @@ class Projectile {
         if (isPlayer) {
             this.x = this.object.x + this.object.width;
             this.y = this.object.y + this.object.height * 0.5 - this.height * 0.5;
-            this.speed = 3;
+            const rad = angle * Math.PI / 180;
+            this.speedX = 3;
+            this.speedY = Math.tan(rad) * 3;
         } else {
             this.x = this.object.x;
             this.y = this.object.y + this.object.height * 0.5 - this.height * 0.5;
-            this.speed = -object.speedX - 1;
+            this.speedX = -object.speedX - 1;
+            this.speedY = 0;
         }
         this.delete = false;
     }
     update() {
-        this.x += this.speed;
+        this.x += this.speedX;
+        this.y += this.speedY;
         if (this.x >= mainCanvas.width || this.x < 0) this.delete = true;
+        if (this.y < 0 || this.y > mainCanvas.height) this.delete = true;
         this.draw();
     }
     draw() {
@@ -375,11 +496,14 @@ class PowerUp {
         this.hit = false;  // flag for single collision else multiple power added
 
         //randomizing the power up awarded to the player
+        // Feature 1: added "rapidfire" and "tripleshot" outcomes
         this.randomize = Math.random();
-        if (this.randomize < 0.25) this.powerup = "life";
-        else if (this.randomize < 0.5) this.powerup = "missile";
-        else if (this.randomize < 0.75) this.powerup = "laser";
-        else this.powerup = "wall";
+        if      (this.randomize < 0.15) this.powerup = "life";
+        else if (this.randomize < 0.30) this.powerup = "missile";
+        else if (this.randomize < 0.45) this.powerup = "laser";
+        else if (this.randomize < 0.60) this.powerup = "wall";
+        else if (this.randomize < 0.80) this.powerup = "rapidfire";
+        else                             this.powerup = "tripleshot";
     }
     update(deltaTime) {
         //sprite animation
@@ -624,6 +748,7 @@ class Enemy {
         if (this.shoots) {
             if (this.fireTimer > this.fireInteval) {
                 currentLevel.enemyProjectiles.push(new Projectile(false, this));
+                soundManager.enemyShoot(); // Feature 3: enemy shoot sound
                 this.fireTimer = 0;
             }
             else this.fireTimer += deltaTime;
@@ -1362,7 +1487,98 @@ class UI {
 
         //score
         bgCtx.fillText(playerScore.toString().padStart(5, "0"), 600, 45);
+
+        // Feature 4: difficulty label (bottom-right corner of bg canvas)
+        bgCtx.font = "bold 18px Silkscreen";
+        bgCtx.fillStyle = difficulty === 'easy' ? '#4f4' : difficulty === 'hard' ? '#f44' : '#aaa';
+        bgCtx.textAlign = "right";
+        bgCtx.fillText(difficulty.toUpperCase(), 835, 478);
+        bgCtx.textAlign = "left";
+
         bgCtx.restore();
+
+        // Feature 1: buff indicators (Rapid Fire / Triple Shot timers)
+        this.drawBuffIndicators();
+    }
+
+    // Feature 1: draw active buff timer bars near top-right of bg canvas
+    drawBuffIndicators() {
+        bgCtx.save();
+        bgCtx.font = "bold 14px Silkscreen";
+        let offsetY = 15;
+
+        if (rapidFireActive) {
+            const pct = 1 - (rapidFireTimer / RAPID_FIRE_DURATION);
+            bgCtx.fillStyle = "#f80";
+            bgCtx.fillText("RF", 753, offsetY + 11);
+            bgCtx.fillStyle = "#444";
+            bgCtx.fillRect(772, offsetY, 60, 12);
+            bgCtx.fillStyle = "#f80";
+            bgCtx.fillRect(772, offsetY, 60 * pct, 12);
+            offsetY += 18;
+        }
+        if (tripleShotActive) {
+            const pct = 1 - (tripleShotTimer / TRIPLE_SHOT_DURATION);
+            bgCtx.fillStyle = "#4cf";
+            bgCtx.fillText("3X", 753, offsetY + 11);
+            bgCtx.fillStyle = "#444";
+            bgCtx.fillRect(772, offsetY, 60, 12);
+            bgCtx.fillStyle = "#4cf";
+            bgCtx.fillRect(772, offsetY, 60 * pct, 12);
+        }
+        bgCtx.restore();
+    }
+
+    // Feature 2: boss health bar — drawn near top-center of bg canvas
+    drawBossHealthBar(boss) {
+        if (!boss || boss.delete || !boss.maxHp) return;
+        const pct = Math.max(0, boss.hp / boss.maxHp);
+        const barW = 360, barH = 16;
+        const x = (bgCanvas.width - barW) / 2;
+        const y = 8;
+
+        // background track
+        bgCtx.save();
+        bgCtx.fillStyle = "#333";
+        bgCtx.fillRect(x, y, barW, barH);
+
+        // filled bar — color shifts green → yellow → red
+        bgCtx.fillStyle = pct > 0.6 ? "#4f4" : pct > 0.3 ? "#ff4" : "#f44";
+        bgCtx.fillRect(x, y, barW * pct, barH);
+
+        // border
+        bgCtx.strokeStyle = "#888";
+        bgCtx.lineWidth = 1.5;
+        bgCtx.strokeRect(x, y, barW, barH);
+
+        // label
+        bgCtx.fillStyle = "#fff";
+        bgCtx.font = "bold 10px Silkscreen";
+        bgCtx.textAlign = "center";
+        bgCtx.fillText("BOSS", bgCanvas.width / 2, y + barH - 3);
+        bgCtx.textAlign = "left";
+        bgCtx.restore();
+    }
+
+    // Feature 6: combo multiplier display on main canvas
+    drawCombo() {
+        if (!comboActive || comboCount < 2) return;
+        const mult = getComboMultiplier();
+        const pct = 1 - (comboTimer / COMBO_DURATION);
+        const alpha = 0.5 + pct * 0.5;
+
+        mainCtx.save();
+        mainCtx.font = "bold 30px Silkscreen";
+        mainCtx.fillStyle = `rgba(255,200,0,${alpha})`;
+        mainCtx.textAlign = "right";
+        mainCtx.fillText(`x${mult} COMBO`, 830, 450);
+
+        // fading timer bar
+        mainCtx.fillStyle = `rgba(255,200,0,0.8)`;
+        mainCtx.fillRect(840 - 140, 458, 140 * pct, 6);
+
+        mainCtx.textAlign = "left";
+        mainCtx.restore();
     }
 }
 // Star Particle effect in the home screen
@@ -1587,6 +1803,8 @@ class Level {
         this.flag = true;     // prevents index overflow of enemy array
         this.bgStop = false;  // stops background
         this.levelComplete = false;
+        this.rapidFireShotTimer = 0; // Feature 1: timer for rapid fire auto-shot
+        this.bossLowHealthWarned = false; // Feature 3: prevent repeated boss-low-health beep
 
         // create background and assigns enemy array of the current level
         switch (this.number) {
@@ -1618,6 +1836,50 @@ class Level {
     update(deltaTime) {
         // ui draw
         this.ui.draw();
+
+        // Feature 2: draw boss health bar when boss is present
+        const activeBoss = this.enemies.find(e => e.isBoss && !e.delete);
+        if (activeBoss) {
+            this.ui.drawBossHealthBar(activeBoss);
+            // Feature 3: boss low-health warning beep (once per boss below 30%)
+            if (!this.bossLowHealthWarned && activeBoss.hp / activeBoss.maxHp < 0.3) {
+                soundManager.bossWarning();
+                this.bossLowHealthWarned = true;
+            }
+        } else {
+            this.bossLowHealthWarned = false; // reset for next boss
+        }
+
+        // Feature 6: combo timer decay
+        if (comboActive) {
+            comboTimer += deltaTime;
+            if (comboTimer >= COMBO_DURATION) {
+                comboActive = false;
+                comboCount = 0;
+            }
+        }
+        this.ui.drawCombo();
+
+        // Feature 1: buff timers decay
+        if (rapidFireActive) {
+            rapidFireTimer += deltaTime;
+            if (rapidFireTimer >= RAPID_FIRE_DURATION) rapidFireActive = false;
+        }
+        if (tripleShotActive) {
+            tripleShotTimer += deltaTime;
+            if (tripleShotTimer >= TRIPLE_SHOT_DURATION) tripleShotActive = false;
+        }
+
+        // Feature 1: rapid fire auto-shot while space is held
+        if (keys.space.pressed && rapidFireActive && !this.player.delete && this.active && !gamePause) {
+            this.rapidFireShotTimer += deltaTime;
+            if (this.rapidFireShotTimer >= RAPID_FIRE_INTERVAL) {
+                firePlayerShot(this);
+                this.rapidFireShotTimer = 0;
+            }
+        } else {
+            this.rapidFireShotTimer = 0;
+        }
 
         // player update
         if (!this.player.delete) this.player.update(deltaTime);
@@ -1654,8 +1916,11 @@ class Level {
                             if (!hb.immune) {
                                 enemy.hp -= 5;
                                 playerScore += 5;
+                                soundManager.hit();
                                 if (enemy.hp <= 0) {
-                                    playerScore += enemy.score;
+                                    soundManager.explosion();
+                                    // Feature 6: boss kill uses registerKill for combo
+                                    registerKill(enemy.score);
                                     for (let i = 0; i < 3; i++) {  //add 3 explosions
                                         this.explosions.push(new Explosion(Math.random() * enemy.width + enemy.x, Math.random() * enemy.height + enemy.y));
                                     }
@@ -1673,8 +1938,12 @@ class Level {
                         enemy.hp -= 10;
                         if (enemy.hp <= 0) {
                             this.explosions.push(new Explosion(enemy.x, enemy.y));
-                            playerScore += enemy.score;
+                            soundManager.explosion();
+                            // Feature 6: register kill with combo scoring
+                            registerKill(enemy.score);
                             enemy.delete = true;
+                        } else {
+                            soundManager.hit();
                         }
                     }
                 }
@@ -1691,8 +1960,10 @@ class Level {
                                     enemy.hp -= sp.damage;
                                     sp.hit = true;
                                     playerScore += sp.damage;
+                                    soundManager.hit();
                                     if (enemy.hp <= 0) {
-                                        playerScore += enemy.score;
+                                        soundManager.explosion();
+                                        registerKill(enemy.score);
                                         for (let i = 0; i < 3; i++) {  //add 3 explosions
                                             this.explosions.push(new Explosion(Math.random() * enemy.width + enemy.x, Math.random() * enemy.height + enemy.y));
                                         }
@@ -1713,8 +1984,11 @@ class Level {
                             sp.hit = true;
                             if (enemy.hp <= 0) {
                                 this.explosions.push(new Explosion(enemy.x, enemy.y));
-                                playerScore += enemy.score;
+                                soundManager.explosion();
+                                registerKill(enemy.score);
                                 enemy.delete = true;
+                            } else {
+                                soundManager.hit();
                             }
                         }
                         if (sp.specialType === "missile") sp.delete = true;
@@ -1726,9 +2000,20 @@ class Level {
             if (enemy.isPowerUp) {
                 if (checkCollision(enemy, this.player.hitbox)) {
                     enemy.delete = true;
+                    soundManager.powerUp();
                     if (enemy.powerup === "life") {
                         if (lives === maxLives) specialCount++;
                         else lives++;
+                    }
+                    // Feature 1: rapid fire buff pickup
+                    else if (enemy.powerup === "rapidfire") {
+                        rapidFireActive = true;
+                        rapidFireTimer = 0; // reset timer so duration refreshes
+                    }
+                    // Feature 1: triple shot buff pickup
+                    else if (enemy.powerup === "tripleshot") {
+                        tripleShotActive = true;
+                        tripleShotTimer = 0; // reset timer so duration refreshes
                     }
                     else if (specialAtttack === enemy.powerup) {
                         if (specialAtttack === "wall") specialCount++;
@@ -1748,7 +2033,8 @@ class Level {
                             enemy.hp -= 1;
                             playerScore += 1;
                             if (enemy.hp <= 0) {
-                                playerScore += enemy.score;
+                                soundManager.explosion();
+                                registerKill(enemy.score);
                                 for (let i = 0; i < 3; i++) {  //add 3 explosions
                                     this.explosions.push(new Explosion(Math.random() * enemy.width + enemy.x, Math.random() * enemy.height + enemy.y));
                                 }
@@ -1760,6 +2046,7 @@ class Level {
                     else if (checkCollision(hb, this.player.hitbox)) {
                         if (!this.player.hit) {
                             this.player.hit = true;
+                            soundManager.hit();
                             this.explosions.push(new Explosion(this.player.x, this.player.y));
                             this.playerDead();
                         }
@@ -1769,7 +2056,8 @@ class Level {
             else {
                 if (this.player.shieldOn) {  //other enemies, when shield is on
                     if (checkCollision(this.player.shield, enemy)) {
-                        playerScore += enemy.score;
+                        soundManager.explosion();
+                        registerKill(enemy.score);
                         this.explosions.push(new Explosion(enemy.x, enemy.y));
                         enemy.delete = true;
                     }
@@ -1778,6 +2066,7 @@ class Level {
                 else if (checkCollision(enemy, this.player.hitbox)) {
                     if (!this.player.hit) {
                         this.player.hit = true;
+                        soundManager.hit();
                         this.explosions.push(new Explosion(this.player.x, this.player.y));
                         this.explosions.push(new Explosion(enemy.x, enemy.y));
                         enemy.delete = true;
@@ -1810,6 +2099,7 @@ class Level {
                 if (!this.player.hit && this.active) {
                     this.player.hit = true;
                     projectile.delete = true;
+                    soundManager.hit();
                     this.explosions.push(new Explosion(this.player.x, this.player.y));
                     this.playerDead();
                 }
@@ -1876,13 +2166,35 @@ class Level {
         this.levelTime += deltaTime;
     }
     swarm(array) {
+        // Feature 4: apply difficulty modifiers when enemies enter the level
+        const cfg = DIFFICULTY_CONFIG[difficulty];
         array.forEach(object => {
+            if (!object.isPowerUp) {
+                if (object.isBoss) {
+                    // store maxHp for Feature 2 health bar
+                    if (!object.maxHp) {
+                        object.maxHp = Math.round(object.hp * cfg.hpMult);
+                        object.hp = object.maxHp;
+                    }
+                } else {
+                    // regular enemy: scale HP, speed, and fire interval
+                    if (!object._diffApplied) {
+                        object.hp = Math.round(object.hp * cfg.hpMult);
+                        object.speedX *= cfg.speedMult;
+                        if (object.shoots) object.fireInteval = Math.round(object.fireInteval * cfg.fireIntervalMult);
+                        object._diffApplied = true; // prevent double-applying on replay
+                    }
+                }
+            }
             this.enemies.push(object);
-        })
+        });
     }
     playerDead() {
         this.player.delete = true;
         lives--;
+        // Feature 6: reset combo on player death
+        comboActive = false;
+        comboCount = 0;
         if (lives > 0) setTimeout(() => { this.player = new Player(); }, 500);
         else setTimeout(() => {
             gameOver = true;
@@ -2862,6 +3174,9 @@ const pauseButton = document.getElementById("pause-button");
 let isMainScreen = true;    // game doesn't start in main screen
 let newGame = false;
 
+let _gameWinSoundPlayed = false;
+let _gameLoseSoundPlayed = false;
+
 function nextLevel(num, isDark) {
     currentLevel = new Level(num, isDark);
 }
@@ -2869,6 +3184,9 @@ function gameWin() {
     bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
     mainCtx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
     particles.forEach(particle => particle.update());
+
+    // Feature 3: play win sound once
+    if (!_gameWinSoundPlayed) { soundManager.win(); _gameWinSoundPlayed = true; }
 
     mainCtx.save();
     mainCtx.font = "bold 60px Silkscreen"
@@ -2886,6 +3204,9 @@ function gameLose() {
     mainCtx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
     particles.forEach(particle => particle.update());
 
+    // Feature 3: play game over sound once
+    if (!_gameLoseSoundPlayed) { soundManager.gameOver(); _gameLoseSoundPlayed = true; }
+
     mainCtx.save();
     bgCanvas.style.background = "#282828";
     mainCtx.fillStyle = "#aad69c";
@@ -2900,6 +3221,15 @@ function gameLose() {
     pauseButton.style.visibility = "hidden";
 }
 function gameStart() {
+    // Feature 3: resume audio context on first user gesture (browser autoplay policy)
+    soundManager._getCtx();
+    // Feature 4: set player lives based on selected difficulty
+    lives = DIFFICULTY_CONFIG[difficulty].lives;
+    // Hide difficulty selector and settings button during gameplay
+    const diffSel = document.getElementById("difficulty-selector");
+    if (diffSel) diffSel.style.display = "none";
+    const settingsBtn = document.getElementById("settings-btn");
+    if (settingsBtn) settingsBtn.style.display = "none";
     playButton.style.display = "none";
     pauseButton.style.visibility = "visible";
     isMainScreen = false;
@@ -2956,5 +3286,10 @@ exitButton.addEventListener("click", gameStart);
 window.addEventListener("resize", ()=>{
     playButton.style.top = `${bgCanvas.getBoundingClientRect().height - 70}`+"px";
     exitButton.style.top = `${bgCanvas.getBoundingClientRect().height - 70}`+"px";
-
 })
+
+// ---- Feature 4 & 5: Difficulty selector and Settings panel wiring ----
+// These are driven from index.html buttons; game.js exports helpers via globals.
+// Difficulty buttons set the global 'difficulty' variable.
+// Sound toggle calls soundManager.toggle().
+// Tauri-specific controls (always-on-top, opacity) are guarded in index.html.

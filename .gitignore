@@ -1,0 +1,10 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Tauri build output (never commit binaries)
+src-tauri/target/
+
+# OS
+.DS_Store
+Thumbs.db
