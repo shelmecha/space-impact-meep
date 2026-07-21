@@ -1,0 +1,11 @@
+{
+  "name": "space-impact-meep",
+  "version": "0.1.0",
+  "description": "Space Impact Meep – Desktop Edition powered by Tauri",
+  "scripts": {
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}
