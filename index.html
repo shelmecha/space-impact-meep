@@ -17,12 +17,49 @@
         <img src="./img/logo.png" alt="logo" id="logo">
     </nav>
     <div id="game">
-        <canvas id="canvas-bg">Your browswer doesn't support HTML Canvas</canvas>
+        <canvas id="canvas-bg">Your browser doesn't support HTML Canvas</canvas>
         <canvas id="canvas-main"></canvas>
         <button id="pause-button">Pause</button>
+
+        <!-- Feature 4: Difficulty selector (shown on main menu only) -->
+        <div id="difficulty-selector">
+            <span class="diff-label">Difficulty:</span>
+            <button class="diff-btn" id="diff-easy">Easy</button>
+            <button class="diff-btn diff-active" id="diff-normal">Normal</button>
+            <button class="diff-btn" id="diff-hard">Hard</button>
+        </div>
+
         <button class="ingame-button" id="play">Play</button>
         <button class="ingame-button" id="exit">Exit</button>
+
+        <!-- Feature 5: Settings button (main menu) -->
+        <button id="settings-btn">⚙ Settings</button>
     </div>
+
+    <!-- Feature 5: Settings Panel -->
+    <div id="settings-panel" style="display:none;">
+        <div id="settings-content">
+            <h3>Settings</h3>
+            <label class="settings-row">
+                <input type="checkbox" id="sound-toggle" checked>
+                <span>Sound On</span>
+            </label>
+            <!-- Tauri-only controls: guarded by window.__TAURI__ check -->
+            <div id="tauri-settings" style="display:none;">
+                <label class="settings-row">
+                    <input type="checkbox" id="always-on-top">
+                    <span>Always on Top</span>
+                </label>
+                <label class="settings-row">
+                    <span>Window Opacity:</span>
+                    <input type="range" id="opacity-slider" min="0.4" max="1" step="0.05" value="1">
+                    <span id="opacity-value">1.0</span>
+                </label>
+            </div>
+            <button id="settings-close">Close</button>
+        </div>
+    </div>
+
     <div class="toggle-container">
         <span>On-screen Buttons:</span>
         <div class="toggle">
@@ -58,6 +95,7 @@
     </div>
 
     <script>
+        // On-screen buttons toggle
         const toggleBar = document.querySelector(".toggle");
         const toggleBall = document.querySelector(".toggle-ball");
         const buttons = document.querySelector(".buttons-onscreen");
@@ -75,6 +113,75 @@
                 info.style.display = "inline-block";
             }
         });
+
+        // Feature 4: Difficulty selector logic
+        const diffBtns = document.querySelectorAll(".diff-btn");
+        diffBtns.forEach(btn => {
+            btn.addEventListener("click", () => {
+                diffBtns.forEach(b => b.classList.remove("diff-active"));
+                btn.classList.add("diff-active");
+                // difficulty is a global set in game.js
+                if (btn.id === "diff-easy")   difficulty = "easy";
+                if (btn.id === "diff-normal") difficulty = "normal";
+                if (btn.id === "diff-hard")   difficulty = "hard";
+            });
+        });
+
+        // Feature 5: Settings panel logic
+        const settingsBtn  = document.getElementById("settings-btn");
+        const settingsPanel = document.getElementById("settings-panel");
+        const settingsClose = document.getElementById("settings-close");
+        const soundToggle   = document.getElementById("sound-toggle");
+        const tauriSettings = document.getElementById("tauri-settings");
+
+        // Show Tauri-only settings if running inside Tauri
+        if (typeof window.__TAURI__ !== "undefined") {
+            tauriSettings.style.display = "block";
+        }
+
+        settingsBtn.addEventListener("click", () => {
+            settingsPanel.style.display = settingsPanel.style.display === "none" ? "flex" : "none";
+        });
+        settingsClose.addEventListener("click", () => {
+            settingsPanel.style.display = "none";
+        });
+
+        // Sound toggle (soundManager is defined in game.js, loaded after this inline script)
+        soundToggle.addEventListener("change", () => {
+            // soundManager may not be defined until game.js loads; guard it
+            if (typeof soundManager !== "undefined") {
+                soundManager.muted = !soundToggle.checked;
+            }
+        });
+
+        // Tauri: always-on-top toggle
+        const alwaysOnTopEl = document.getElementById("always-on-top");
+        if (alwaysOnTopEl) {
+            alwaysOnTopEl.addEventListener("change", async () => {
+                if (typeof window.__TAURI__ !== "undefined") {
+                    try {
+                        const { getCurrentWindow } = window.__TAURI__.window;
+                        await getCurrentWindow().setAlwaysOnTop(alwaysOnTopEl.checked);
+                    } catch(e) { console.warn("Tauri setAlwaysOnTop failed:", e); }
+                }
+            });
+        }
+
+        // Tauri: window opacity slider
+        const opacitySlider = document.getElementById("opacity-slider");
+        const opacityValue  = document.getElementById("opacity-value");
+        if (opacitySlider) {
+            opacitySlider.addEventListener("input", async () => {
+                const val = parseFloat(opacitySlider.value);
+                opacityValue.textContent = val.toFixed(1);
+                if (typeof window.__TAURI__ !== "undefined") {
+                    try {
+                        const { getCurrentWindow } = window.__TAURI__.window;
+                        await getCurrentWindow().setOpacity(val);
+                    } catch(e) { console.warn("Tauri setOpacity failed:", e); }
+                }
+            });
+        }
     </script>
 
     <script src="game.js"></script>
