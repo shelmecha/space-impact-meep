@@ -120,6 +120,8 @@ class SoundManager {
     win()         { [523, 659, 784, 1047].forEach((f, i) => setTimeout(() => this._tone(f, 'sine', 0.25, 0.4), i * 150)); }
     bossWarning() { this._tone(150, 'sawtooth', 0.25, 0.3); }
     toggle()      { this.muted = !this.muted; return this.muted; }
+    /** Public: ensure AudioContext is running (call on first user gesture) */
+    resume()      { try { this._getCtx(); } catch(e) {} }
 }
 const soundManager = new SoundManager();
 
@@ -434,6 +436,14 @@ class Player {
         mainCtx.drawImage(this.image, this.frameX * this.spriteSize, this.frameY * this.spriteSize, this.width, this.height, this.x, this.y, this.width, this.height);
     }
 }
+// Precomputed speedY offsets for Triple Shot angles (-10°, 0°, +10°)
+// to avoid redundant trig calls on every shot (Feature 1 optimisation)
+const TRIPLE_SHOT_SPEEDS = {
+    up:   Math.tan(-10 * Math.PI / 180) * 3,  // ≈ -0.529
+    mid:  0,
+    down: Math.tan( 10 * Math.PI / 180) * 3   // ≈  0.529
+};
+
 class Projectile {
     // angle (degrees): 0 = straight right; negative = upward; positive = downward
     // Feature 1: angle parameter supports Triple Shot angled projectiles
@@ -445,9 +455,11 @@ class Projectile {
         if (isPlayer) {
             this.x = this.object.x + this.object.width;
             this.y = this.object.y + this.object.height * 0.5 - this.height * 0.5;
-            const rad = angle * Math.PI / 180;
-            this.speedX = 3;
-            this.speedY = Math.tan(rad) * 3;
+            // Use precomputed values for the known triple-shot angles; general formula otherwise
+            if (angle === 0)   { this.speedX = 3; this.speedY = TRIPLE_SHOT_SPEEDS.mid; }
+            else if (angle === -10) { this.speedX = 3; this.speedY = TRIPLE_SHOT_SPEEDS.up; }
+            else if (angle ===  10) { this.speedX = 3; this.speedY = TRIPLE_SHOT_SPEEDS.down; }
+            else { const rad = angle * Math.PI / 180; this.speedX = 3; this.speedY = Math.tan(rad) * 3; }
         } else {
             this.x = this.object.x;
             this.y = this.object.y + this.object.height * 0.5 - this.height * 0.5;
@@ -3222,7 +3234,7 @@ function gameLose() {
 }
 function gameStart() {
     // Feature 3: resume audio context on first user gesture (browser autoplay policy)
-    soundManager._getCtx();
+    soundManager.resume();
     // Feature 4: set player lives based on selected difficulty
     lives = DIFFICULTY_CONFIG[difficulty].lives;
     // Hide difficulty selector and settings button during gameplay
