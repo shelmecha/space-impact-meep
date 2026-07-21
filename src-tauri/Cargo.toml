@@ -1,0 +1,29 @@
+[package]
+name = "space-impact-meep"
+version = "0.1.0"
+description = "Space Impact Meep – Desktop Edition"
+authors = ["shelmecha"]
+license = ""
+repository = ""
+default-run = "space-impact-meep"
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "space_impact_meep_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

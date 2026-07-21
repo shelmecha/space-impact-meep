@@ -18,9 +18,51 @@ The game is responsive and can be played on a mobile browser. I've added onscree
 <img src="https://user-images.githubusercontent.com/118676744/224077845-b67fc1f2-04bc-4ef4-b4f2-d01a72d24f1b.png" height="422" width="195"/>
 
 ## How to run
-Being a complete front-end application, the game can be run on any web broswer.
+
+### Browser (no install required)
+Being a complete front-end application, the game can be run on any web browser.
 
 Or, download the files and run the **index.html** file in any of the browser. Just make sure the file paths remains the same.
+
+---
+
+## Desktop App (Windows `.exe`) — powered by Tauri v2
+
+The game ships with a **Tauri v2** wrapper so it can be built and installed as a native Windows desktop application.
+
+### Prerequisites
+- [Node.js](https://nodejs.org/) v18 or newer
+- [Rust](https://www.rust-lang.org/tools/install) (stable toolchain via `rustup`)
+- Windows: [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) or Visual Studio with the "Desktop development with C++" workload
+
+### Install dependencies
+```bash
+npm install
+```
+
+### Run in development mode (live preview)
+```bash
+npm run tauri dev
+```
+
+This opens the game inside a native desktop window.  
+The web source files are served directly from the project root — no bundler needed.
+
+### Build the Windows installer / `.exe`
+```bash
+npm run tauri build
+```
+
+After the build completes the output files are located in:
+```
+src-tauri/target/release/bundle/
+├── msi/          # Windows Installer (.msi)
+├── nsis/         # NSIS installer (.exe)
+└── ...
+```
+
+> **Note:** The first build downloads Rust crate dependencies and compiles the Tauri runtime (~5–10 minutes).  
+> Subsequent builds are much faster thanks to cargo's incremental compilation cache.
 
 
 ## Software Tools Used
