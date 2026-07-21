@@ -5,7 +5,6 @@
   "identifier": "com.space-impact.app",
   "build": {
     "beforeDevCommand": "",
-    "devUrl": "../index.html",
     "beforeBuildCommand": "",
     "frontendDist": ".."
   },
